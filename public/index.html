@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fraud Ring Finder</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: system-ui, Arial, sans-serif; background: #f3f4f6; color: #111827; }
+  header { background: #111827; color: white; padding: 16px 24px; }
+  header h1 { margin: 0; font-size: 20px; }
+  header p { margin: 4px 0 0; font-size: 13px; color: #9ca3af; }
+  .layout { display: flex; gap: 20px; padding: 20px; align-items: flex-start; }
+  aside { width: 250px; flex-shrink: 0; background: white; border-radius: 10px; padding: 14px; }
+  aside h2 { font-size: 13px; text-transform: uppercase; color: #6b7280; margin: 0 0 8px; }
+  main { flex: 1; min-width: 0; }
+  .txn { display: block; width: 100%; text-align: left; background: #f9fafb; border: 1px solid #e5e7eb;
+         border-radius: 8px; padding: 8px 10px; margin-bottom: 6px; cursor: pointer; font-size: 14px; }
+  .txn span { display: block; font-size: 12px; color: #6b7280; margin-top: 2px; }
+  .txn:hover { background: #eef2ff; }
+  .txn.active { border-color: #4f46e5; background: #eef2ff; }
+  .manual { display: flex; gap: 6px; margin-top: 6px; }
+  .manual input { flex: 1; min-width: 0; padding: 7px; border: 1px solid #d1d5db; border-radius: 6px; }
+  .manual button { padding: 7px 10px; border: 0; background: #4f46e5; color: white; border-radius: 6px; cursor: pointer; }
+  .card { background: white; border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+  .card h3 { margin: 0 0 10px; font-size: 15px; }
+  .empty { background: white; border-radius: 10px; padding: 40px; text-align: center; color: #6b7280; }
+  .error { color: #b91c1c; }
+  .verdict { display: flex; align-items: center; gap: 18px; }
+  .score { font-size: 44px; font-weight: 700; line-height: 1; }
+  .score small { font-size: 16px; color: #6b7280; font-weight: 400; }
+  .high { color: #dc2626; } .medium { color: #d97706; } .low { color: #059669; }
+  .vtext { font-size: 18px; font-weight: 600; }
+  .meta { font-size: 13px; color: #6b7280; margin-top: 4px; }
+  .explain { white-space: pre-wrap; line-height: 1.55; font-size: 15px; }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 900px) { .layout { flex-direction: column; } aside { width: 100%; } .two { grid-template-columns: 1fr; } }
+  ul.reasons, ol.steps { margin: 0; padding-left: 18px; font-size: 14px; line-height: 1.5; }
+  ul.reasons b { color: #4f46e5; }
+  ol.steps small { color: #6b7280; display: block; }
+  .path { display: flex; justify-content: space-between; align-items: center; gap: 10px;
+          border: 1px solid #e5e7eb; border-radius: 8px; padding: 8px 10px; margin-bottom: 6px; font-size: 13px; }
+  .path button { border: 1px solid #4f46e5; color: #4f46e5; background: white; border-radius: 6px; padding: 4px 8px; cursor: pointer; white-space: nowrap; }
+  svg { width: 100%; height: auto; background: #fafafa; border-radius: 8px; border: 1px solid #e5e7eb; }
+  .legend { display: flex; flex-wrap: wrap; gap: 12px; font-size: 12px; color: #4b5563; margin-top: 8px; }
+  .dot { display: inline-block; width: 11px; height: 11px; border-radius: 50%; margin-right: 4px; vertical-align: -1px; }
+  .sq { border-radius: 3px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Fraud Ring Finder</h1>
+  <p>An agent that follows links in a FalkorDB graph to find fraud rings. All data is synthetic (made up).</p>
+</header>
+
+<div class="layout">
+  <aside>
+    <h2>Flagged transactions</h2>
+    <div id="flagged">Loading...</div>
+    <h2 style="margin-top:14px">Or type an id</h2>
+    <form class="manual" id="manualForm">
+      <input id="txnInput" placeholder="T1017">
+      <button type="submit">Go</button>
+    </form>
+  </aside>
+  <main id="main">
+    <div class="empty">Pick a flagged transaction on the left to start an investigation.</div>
+  </main>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+
+const NODE_COLORS = { Account: '#3b82f6', Device: '#f59e0b', Card: '#8b5cf6', Address: '#10b981', IP: '#9ca3af' };
+const EDGE_COLORS = { USED_DEVICE: '#f59e0b', OWNS_CARD: '#8b5cf6', LIVES_AT: '#10b981', LOGGED_IN_FROM: '#9ca3af' };
+const W = 760, H = 480;
+
+function esc(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+const rupee = (n) => '₹' + Math.round(n).toLocaleString('en-IN');
+
+// ---------- left panel ----------
+async function loadFlagged() {
+  const box = $('flagged');
+  try {
+    const res = await fetch('/api/flagged');
+    const list = await res.json();
+    box.innerHTML = '';
+    for (const f of list) {
+      const b = document.createElement('button');
+      b.className = 'txn';
+      b.innerHTML = `<strong>${esc(f.txn)}</strong><span>${esc(f.account)} · ${rupee(f.amount)}</span>`;
+      b.onclick = () => investigate(f.txn, b);
+      box.appendChild(b);
+    }
+  } catch (e) {
+    box.textContent = 'Could not load. Is the server running?';
+  }
+}
+
+$('manualForm').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const id = $('txnInput').value.trim().toUpperCase();
+  if (id) investigate(id, null);
+});
+
+// ---------- ask the server ----------
+async function investigate(txn, btn) {
+  document.querySelectorAll('.txn').forEach((b) => b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  $('main').innerHTML = `<div class="empty">Investigating ${esc(txn)}...</div>`;
+  try {
+    const res = await fetch('/api/investigate/' + encodeURIComponent(txn));
+    const data = await res.json();
+    if (!res.ok) {
+      $('main').innerHTML = `<div class="empty error">${esc(data.error || 'Something went wrong')}</div>`;
+      return;
+    }
+    render(data);
+  } catch (e) {
+    $('main').innerHTML = '<div class="empty error">Could not reach the server.</div>';
+  }
+}
+
+// ---------- show the answer ----------
+let current = null;
+
+function render(d) {
+  const level = d.score >= 70 ? 'high' : d.score >= 40 ? 'medium' : 'low';
+
+  const reasons = d.reasons.length
+    ? d.reasons.map((r) => `<li><b>+${r.points}</b> ${esc(r.text)}</li>`).join('')
+    : '<li>No warning signs found.</li>';
+
+  const steps = d.trace
+    .map((t) => `<li>${esc(t.action)}<small>→ ${esc(t.result)}</small></li>`)
+    .join('');
+
+  const paths = d.paths.length
+    ? d.paths
+        .map((p, i) => `<div class="path"><span>${esc(p.path.join('  →  '))}</span>
+           <button data-i="${i}">Show on graph</button></div>`)
+        .join('')
+    : '<div class="meta">No paths to show. This account is not linked to others.</div>';
+
+  $('main').innerHTML = `
+    <div class="card verdict">
+      <div class="score ${level}">${d.score}<small> / 100</small></div>
+      <div>
+        <div class="vtext ${level}">${esc(d.verdict)}</div>
+        <div class="meta">Transaction ${esc(d.transaction.id)} · account ${esc(d.transaction.account)} · ${rupee(d.transaction.amount)} · ${d.group.length} account(s) in the group</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>The ring in the graph</h3>
+      <div id="graphBox"></div>
+      <div class="legend">
+        <span><i class="dot" style="background:#ef4444"></i>Flagged account</span>
+        <span><i class="dot" style="background:#3b82f6"></i>Other account</span>
+        <span><i class="dot sq" style="background:#f59e0b"></i>Device</span>
+        <span><i class="dot sq" style="background:#8b5cf6"></i>Card</span>
+        <span><i class="dot sq" style="background:#10b981"></i>Address</span>
+        <span><i class="dot sq" style="background:#9ca3af"></i>IP (weak clue, dashed)</span>
+      </div>
+    </div>
+
+    <div class="card"><h3>Explanation</h3><div class="explain" id="explainBox"></div></div>
+
+    <div class="two">
+      <div class="card"><h3>Why this score</h3><ul class="reasons">${reasons}</ul></div>
+      <div class="card"><h3>Steps the agent took</h3><ol class="steps">${steps}</ol></div>
+    </div>
+
+    <div class="card"><h3>Connection paths</h3>${paths}</div>
+  `;
+
+  $('explainBox').textContent = d.explanation; // textContent keeps it safe
+
+  document.querySelectorAll('.path button').forEach((b) => {
+    b.onclick = () => {
+      const ids = d.paths[Number(b.dataset.i)].path.map((p) => p.split(':')[1]);
+      draw(ids);
+    };
+  });
+
+  current = layout(d.graph);
+  if (current.nodes.length <= 1) {
+    $('graphBox').innerHTML = '<div class="meta">This account shares nothing with other accounts, so there is no ring to draw.</div>';
+  } else {
+    draw(null);
+  }
+}
+
+// ---------- place the nodes (a small force layout) ----------
+function layout(g) {
+  const nodes = g.nodes.map((n) => ({ ...n, vx: 0, vy: 0 }));
+  const N = nodes.length;
+  nodes.forEach((n, i) => {
+    const a = (2 * Math.PI * i) / Math.max(N, 1);
+    n.x = W / 2 + Math.cos(a) * 180;
+    n.y = H / 2 + Math.sin(a) * 180;
+  });
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  const links = g.edges
+    .map((e) => ({ s: byId.get(e.from), t: byId.get(e.to), type: e.type }))
+    .filter((l) => l.s && l.t);
+
+  for (let it = 0; it < 300; it++) {
+    const cool = 1 - it / 300;
+    // nodes push each other away
+    for (let i = 0; i < N; i++) {
+      for (let j = i + 1; j < N; j++) {
+        const a = nodes[i], b = nodes[j];
+        let dx = a.x - b.x, dy = a.y - b.y;
+        const d2 = dx * dx + dy * dy + 0.01;
+        const f = 5000 / d2, d = Math.sqrt(d2);
+        dx = (dx / d) * f; dy = (dy / d) * f;
+        a.vx += dx; a.vy += dy; b.vx -= dx; b.vy -= dy;
+      }
+    }
+    // linked nodes pull each other closer
+    for (const l of links) {
+      const dx = l.t.x - l.s.x, dy = l.t.y - l.s.y;
+      const d = Math.sqrt(dx * dx + dy * dy) + 0.01;
+      const f = (d - 90) * 0.03;
+      l.s.vx += (dx / d) * f; l.s.vy += (dy / d) * f;
+      l.t.vx -= (dx / d) * f; l.t.vy -= (dy / d) * f;
+    }
+    // a gentle pull to the middle, then move
+    for (const n of nodes) {
+      n.vx += (W / 2 - n.x) * 0.004;
+      n.vy += (H / 2 - n.y) * 0.004;
+      n.x = Math.min(W - 40, Math.max(40, n.x + n.vx * cool));
+      n.y = Math.min(H - 40, Math.max(40, n.y + n.vy * cool));
+      n.vx *= 0.8; n.vy *= 0.8;
+    }
+  }
+  return { nodes, links };
+}
+
+// ---------- draw the picture ----------
+function draw(hl) {
+  const { nodes, links } = current;
+  const active = hl && hl.length > 0;
+  const hlNodes = new Set(hl || []);
+  const hlEdges = new Set();
+  for (let i = 0; i < (hl || []).length - 1; i++) {
+    hlEdges.add(hl[i] + '|' + hl[i + 1]);
+    hlEdges.add(hl[i + 1] + '|' + hl[i]);
+  }
+
+  let out = '';
+  for (const l of links) {
+    const on = hlEdges.has(l.s.id + '|' + l.t.id);
+    const dash = l.type === 'LOGGED_IN_FROM' ? '5 4' : '0';
+    out += `<line x1="${l.s.x}" y1="${l.s.y}" x2="${l.t.x}" y2="${l.t.y}"
+      stroke="${EDGE_COLORS[l.type]}" stroke-width="${on ? 5 : 1.6}" stroke-dasharray="${dash}"
+      opacity="${active && !on ? 0.2 : 0.9}"/>`;
+  }
+  for (const n of nodes) {
+    const dim = active && !hlNodes.has(n.id) ? 0.3 : 1;
+    if (n.kind === 'Account') {
+      const color = n.flagged ? '#ef4444' : NODE_COLORS.Account;
+      const r = n.flagged ? 17 : 13;
+      out += `<circle cx="${n.x}" cy="${n.y}" r="${r}" fill="${color}" stroke="#111827" stroke-width="${n.flagged ? 3 : 0}" opacity="${dim}"/>`;
+      out += `<text x="${n.x}" y="${n.y + r + 13}" font-size="11" text-anchor="middle" fill="#111827" opacity="${dim}">${esc(n.id)}</text>`;
+    } else {
+      out += `<rect x="${n.x - 10}" y="${n.y - 10}" width="20" height="20" rx="4" fill="${NODE_COLORS[n.kind]}" opacity="${dim}"/>`;
+      out += `<text x="${n.x}" y="${n.y + 24}" font-size="10" text-anchor="middle" fill="#4b5563" opacity="${dim}">${esc(n.id)}</text>`;
+    }
+  }
+  $('graphBox').innerHTML = `<svg viewBox="0 0 ${W} ${H}">${out}</svg>` +
+    (active ? '<div class="meta" style="margin-top:6px">Showing one path. <a href="#" id="clearHl">Show everything again</a></div>' : '');
+  const clear = $('clearHl');
+  if (clear) clear.onclick = (e) => { e.preventDefault(); draw(null); };
+}
+
+loadFlagged();
+</script>
+</body>
+</html>
