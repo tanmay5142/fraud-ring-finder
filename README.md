@@ -9,7 +9,6 @@ clear rules, and explains its answer using the exact path through the graph.
 **Live demo:** https://fraud-ring-finder.onrender.com/
 **Demo video:** https://drive.google.com/file/d/1foKkqY3yvfkwVg4JpL8B6vnSt8yp-K3E/view?usp=sharing
 
-> The free server sleeps when idle. The first load can take up to a minute.
 
 [Fraud ring found for transaction T1017](screenshots/t1017.png)
 
