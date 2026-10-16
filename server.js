@@ -4,6 +4,7 @@ import { getFlaggedTransactions, getRingGraph } from './queries.js';
 import { investigate, explain } from './agent.js';
 
 const app = express();
+const cache = new Map();
 const { graph } = await connect();
 
 app.use(express.static('public'));
@@ -27,20 +28,21 @@ app.get('/api/flagged', async (req, res) => {
   }
 });
 
-// 3. Investigate one transaction
 app.get('/api/investigate/:txnId', async (req, res) => {
   const txnId = req.params.txnId;
 
-  // only allow ids that look like T0123
   if (!/^T\d{4}$/.test(txnId)) {
     return res.status(400).json({ error: 'Transaction id must look like T1017' });
   }
+  if (cache.has(txnId)) return res.json(cache.get(txnId));
 
   try {
     const evidence = await investigate(graph, txnId);
     const explanation = await explain(evidence);
     const picture = await getRingGraph(graph, evidence.group, evidence.transaction.account);
-    res.json({ ...evidence, explanation, graph: picture });
+    const answer = { ...evidence, explanation, graph: picture };
+    cache.set(txnId, answer);
+    res.json(answer);
   } catch (e) {
     const notFound = e.message.includes('not found');
     res.status(notFound ? 404 : 500).json({ error: e.message });

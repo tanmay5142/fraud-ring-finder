@@ -7,6 +7,7 @@
     "test": "echo \"Error: no test specified\" && exit 1",
     "start": "node --env-file-if-exists=.env server.js"
   },
+  "engines": { "node": ">=20" },
   "keywords": [],
   "type": "module",
   "dependencies": {
